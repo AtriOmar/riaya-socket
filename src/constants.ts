@@ -1,1 +1,1 @@
-export const SILENT_CHUNK_40MS = new Int16Array(960); // 40ms @ 24kHz
+// No constants needed for Twilio integration — audio format is g711_ulaw natively.

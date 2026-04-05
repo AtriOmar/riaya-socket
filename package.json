@@ -1,23 +1,28 @@
 {
-  "name": "server",
+  "name": "riaya-realtime",
   "version": "1.0.0",
   "main": "dist/server.js",
-  "author": "Dan Wahlin",
   "license": "ISC",
-  "description": "Realtime OpenAI demo showing real-time text and speech. Learn a language or complete a form using your voice.",
+  "description": "Riaya Realtime - Twilio phone call to Azure OpenAI Realtime API bridge for doctor appointment booking",
   "type": "module",
   "scripts": {
     "start": "tsc && node dist/server.js",
     "build": "tsc",
-    "dev": "tsc && concurrently \"tsc --watch\" \"nodemon dist/server.js\""
+    "dev": "tsc && concurrently \"tsc --watch\" \"nodemon dist/server.js\"",
+    "lint": "biome check",
+		"format": "biome format",
+		"fix:lint": "biome check --write",
+		"fix:format": "biome format --write",
+		"fix:all": "biome check --write && biome format --write",
+		"typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@azure/identity": "^4.11.1",
-    "@modelcontextprotocol/sdk": "^1.17.5",
+    "@biomejs/biome": "^2.4.10",
+    "axios": "^1.7.9",
     "cors": "^2.8.5",
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
-    "openai":"5.20.0",
     "pino": "^9.9.4",
     "pino-pretty": "^13.1.1",
     "ws": "^8.18.3"
