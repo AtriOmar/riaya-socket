@@ -3,6 +3,8 @@ import axios from "axios";
 import { config } from "dotenv";
 import type { Logger } from "pino";
 import { type RawData, WebSocket } from "ws";
+import { CITIES } from "./constants/cities.js";
+import { SPECIALITIES } from "./constants/specialities.js";
 import type {
 	BestFitDoctor,
 	DashboardMessage,
@@ -518,6 +520,12 @@ export class TwilioSession {
 			let result: string;
 
 			switch (name) {
+				case "get_specialities":
+					result = this.getSpecialities();
+					break;
+				case "get_cities":
+					result = this.getCities();
+					break;
 				case "find_available_slots":
 					result = await this.findAvailableSlots(JSON.parse(args));
 					break;
@@ -591,8 +599,34 @@ export class TwilioSession {
 		}
 	}
 
+	private getSpecialities(): string {
+		return JSON.stringify(
+			SPECIALITIES.map(({ slug, en_name, fr_name, ar_name }) => ({
+				slug,
+				en_name,
+				fr_name,
+				ar_name,
+			})),
+		);
+	}
+
+	private getCities(): string {
+		return JSON.stringify(
+			CITIES.map(
+				({ slug, latitude, longitude, en_name, fr_name, ar_name }) => ({
+					slug,
+					latitude,
+					longitude,
+					en_name,
+					fr_name,
+					ar_name,
+				}),
+			),
+		);
+	}
+
 	private async findAvailableSlots(params: {
-		speciality: string;
+		speciality_slug: string;
 		latitude: number;
 		longitude: number;
 		preferred_time?: string;
@@ -603,7 +637,7 @@ export class TwilioSession {
 			`http://localhost:3000/api/doctors/best-fit`,
 			{
 				params: {
-					speciality: params.speciality,
+					speciality: params.speciality_slug,
 					lat: params.latitude,
 					long: params.longitude,
 					time: params.preferred_time,
@@ -642,6 +676,9 @@ export class TwilioSession {
 	}): Promise<string> {
 		this.logger.info({ params }, "📅 Booking appointment");
 
+		console.log("-------------------- params --------------------");
+		console.log(params);
+
 		const { data } = await axios.post(
 			`${NEXTJS_API_URL}/api/appointments/external`,
 			{
@@ -653,6 +690,9 @@ export class TwilioSession {
 				end: params.end,
 			},
 		);
+
+		console.log("-------------------- data --------------------");
+		console.log(data);
 
 		// Broadcast to dashboard
 		if (this.callSid) {

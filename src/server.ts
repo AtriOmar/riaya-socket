@@ -46,7 +46,7 @@ app.all("/incoming-call", (_req: Request, res: Response) => {
 
 	const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Chirp3-HD-Aoede">Just a minute</Say>
+//   <Say voice="Google.en-US-Chirp3-HD-Aoede">Just a minute</Say>
   <Connect>
     <Stream url="wss://${host}/media-stream" />
   </Connect>
