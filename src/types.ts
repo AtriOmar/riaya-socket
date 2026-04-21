@@ -125,28 +125,40 @@ export type FunctionCallResponse = {
 
 // ==================== API Types ====================
 
+/** Row from `GET /api/doctors/best-fit` (see web-ts doctors route) */
 export type BestFitDoctor = {
-	_id: string;
+	id: number;
+	userId: string;
 	firstName: string;
 	lastName: string;
+	tin: string;
+	status: string;
 	cabinetName: string;
-	cabinetLocation: { city: string; longitude: number; latitude: number };
+	cabinetCityId: number;
+	cabinetLongitude: number;
+	cabinetLatitude: number;
+	specialityId: number;
+	cinRecto: string | null;
+	cinVerso: string | null;
+	createdAt: string;
+	updatedAt: string;
 	distance: number;
 	nextSlot: { start: string; end: string };
 };
 
+/** Body for `POST /api/appointments/external` */
 export type BookAppointmentParams = {
-	doctor: string; // doctor ObjectId
-	name: string; // patient name
+	doctorId: number;
+	name: string;
 	phoneNumber: string;
 	illness: string;
-	start: string; // ISO date
-	end: string; // ISO date
+	start: string;
+	end: string;
 };
 
 export type FindSlotsParams = {
-	speciality: string;
+	specialitySlug: string;
 	latitude: number;
 	longitude: number;
-	preferred_time?: string; // ISO date
+	preferredTime?: string;
 };

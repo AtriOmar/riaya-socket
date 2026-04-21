@@ -7,6 +7,7 @@ import { CITIES } from "./constants/cities.js";
 import { SPECIALITIES } from "./constants/specialities.js";
 import type {
 	BestFitDoctor,
+	BookAppointmentParams,
 	DashboardMessage,
 	SystemMessage,
 	TwilioMediaMessage,
@@ -20,8 +21,13 @@ const {
 	OPENAI_ENDPOINT,
 	OPENAI_MODEL,
 	OPENAI_API_VERSION,
-	NEXTJS_API_URL,
+	NEXTJS_API_URL: NEXTJS_API_URL_RAW,
 } = process.env as Record<string, string>;
+
+/** Base URL of the Next.js app (REST only). Not the public socket/ngrok URL. */
+const NEXTJS_API_URL = (NEXTJS_API_URL_RAW || "http://localhost:3000")
+	.trim()
+	.replace(/\/$/, "");
 
 // ==================== Session Config ====================
 
@@ -42,6 +48,169 @@ const SESSION_CONFIG = {
 		10,
 	),
 };
+
+// ==================== Tool / HTTP logging ====================
+
+const MAX_LOG_CHARS = 8000;
+
+function truncateForLog(value: string, max = MAX_LOG_CHARS): string {
+	if (value.length <= max) return value;
+	return `${value.slice(0, max)}…[truncated, ${value.length} chars total]`;
+}
+
+function tryParseJsonString(raw: string): unknown {
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return undefined;
+	}
+}
+
+function bodyFromAxiosConfig(data: unknown): unknown {
+	if (data == null) return data;
+	if (typeof data === "string") return tryParseJsonString(data) ?? data;
+	return data;
+}
+
+function consoleLogToolHttpError(
+	tool: string,
+	ctx: { callSid?: string | null; call_id?: string; input?: unknown },
+	error: unknown,
+): void {
+	console.log("---------------------- TOOL HTTP ERROR ----------------------");
+	console.log("tool:", tool);
+	console.log("callSid:", ctx.callSid);
+	console.log("call_id:", ctx.call_id);
+	console.log("input:", JSON.stringify(ctx.input, null, 2));
+	if (axios.isAxiosError(error)) {
+		console.log("axiosMessage:", error.message);
+		console.log("axiosCode:", error.code);
+		console.log(
+			"httpStatus:",
+			error.response?.status,
+			error.response?.statusText,
+		);
+		console.log("responseData:", error.response?.data);
+		console.log("requestUrl:", error.config?.url);
+		console.log("requestMethod:", error.config?.method);
+		console.log("requestParams:", error.config?.params);
+		console.log("requestBody:", bodyFromAxiosConfig(error.config?.data));
+	} else {
+		console.log("non-axios error:", error);
+	}
+	console.log("-------------------------------------------------------------");
+}
+
+function toolFailureMessage(tool: string, error: unknown): string {
+	if (axios.isAxiosError(error)) {
+		const status = error.response?.status;
+		const data = error.response?.data;
+		const detail =
+			data === undefined || data === null
+				? ""
+				: typeof data === "string"
+					? truncateForLog(data, 2500)
+					: truncateForLog(JSON.stringify(data), 2500);
+		const suffix = detail ? ` — ${detail}` : "";
+		return `${tool}: HTTP ${String(status ?? "?")} ${error.message}${suffix}`;
+	}
+	if (error instanceof Error) return `${tool}: ${error.message}`;
+	return `${tool}: ${String(error)}`;
+}
+
+type FindAvailableSlotsArgs = {
+	specialitySlug: string;
+	latitude: number;
+	longitude: number;
+	preferredTime?: string;
+};
+
+type BookAppointmentToolArgs = {
+	doctorId: number | string;
+	patientName: string;
+	phoneNumber: string;
+	illness: string;
+	start: string;
+	end: string;
+};
+
+function strField(
+	raw: Record<string, unknown>,
+	snake: string,
+	camel: string,
+): string | undefined {
+	const a = raw[snake];
+	const b = raw[camel];
+	if (typeof a === "string" && a.length > 0) return a;
+	if (typeof b === "string" && b.length > 0) return b;
+	return undefined;
+}
+
+function numField(
+	raw: Record<string, unknown>,
+	snake: string,
+	camel: string,
+): number | undefined {
+	const a = raw[snake];
+	const b = raw[camel];
+	for (const v of [a, b]) {
+		if (typeof v === "number" && Number.isFinite(v)) return v;
+	}
+	return undefined;
+}
+
+/** Accepts snake_case (tool schema) or legacy camelCase; maps to internal shape for HTTP. */
+function normalizeFindAvailableSlotsArgs(
+	raw: unknown,
+): FindAvailableSlotsArgs | null {
+	if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+		return null;
+	const o = raw as Record<string, unknown>;
+	const specialitySlug =
+		strField(o, "speciality_slug", "specialitySlug") ?? "";
+	const latitude = numField(o, "latitude", "latitude");
+	const longitude = numField(o, "longitude", "longitude");
+	const preferredTime = strField(o, "preferred_time", "preferredTime");
+	if (latitude === undefined || longitude === undefined) return null;
+	return {
+		specialitySlug,
+		latitude,
+		longitude,
+		...(preferredTime !== undefined ? { preferredTime } : {}),
+	};
+}
+
+/** Accepts snake_case (tool schema) or legacy camelCase; maps to internal shape for HTTP. */
+function normalizeBookAppointmentArgs(
+	raw: unknown,
+): BookAppointmentToolArgs | null {
+	if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+		return null;
+	const o = raw as Record<string, unknown>;
+	const doctorId = o.doctor_id ?? o.doctorId;
+	const patientName = strField(o, "patient_name", "patientName");
+	const phoneNumber = strField(o, "phone_number", "phoneNumber");
+	const illness = strField(o, "illness", "illness");
+	const start = strField(o, "start", "start");
+	const end = strField(o, "end", "end");
+	if (
+		patientName === undefined ||
+		phoneNumber === undefined ||
+		illness === undefined ||
+		start === undefined ||
+		end === undefined
+	) {
+		return null;
+	}
+	return {
+		doctorId: doctorId as number | string,
+		patientName,
+		phoneNumber,
+		illness,
+		start,
+		end,
+	};
+}
 
 // ==================== OpenAI Realtime Event Types ====================
 
@@ -87,6 +256,12 @@ export class TwilioSession {
 
 	// AI transcript accumulator (per response)
 	private currentAiTranscript = "";
+
+	/** E.164 (or Twilio-provided) caller ID from Stream customParameters */
+	private callerPhone: string | null = null;
+
+	/** Only the first session.update should trigger the opening greeting */
+	private initialGreetingSent = false;
 
 	constructor(
 		private readonly twilioWs: WebSocket,
@@ -172,6 +347,18 @@ export class TwilioSession {
 		};
 	}
 
+	private buildSessionInstructions(): string {
+		if (!this.callerPhone) return this.systemMessage.message;
+		return `${this.systemMessage.message}
+
+═══════════════════════════════════════════════
+CALLER PHONE (ALREADY KNOWN — DO NOT ASK)
+═══════════════════════════════════════════════
+The patient's phone number on this call is: **${this.callerPhone}**.
+- Do **not** ask the patient for their phone number.
+- When calling \`book_appointment\`, pass this number as \`phone_number\` (digits only, per tool schema).`;
+	}
+
 	private sendSessionConfig() {
 		if (this.openAIWs?.readyState !== WebSocket.OPEN) return;
 
@@ -179,13 +366,16 @@ export class TwilioSession {
 			JSON.stringify({
 				type: "session.update",
 				session: {
-					instructions: this.systemMessage.message,
+					instructions: this.buildSessionInstructions(),
 					tools: this.systemMessage.tools,
 					...SESSION_CONFIG,
 				},
 			}),
 		);
-		this.logger.info("✅ Session config sent to OpenAI");
+		this.logger.info(
+			{ hasCallerPhone: Boolean(this.callerPhone) },
+			"✅ Session config sent to OpenAI",
+		);
 	}
 
 	private sendInitialGreeting() {
@@ -233,7 +423,10 @@ export class TwilioSession {
 
 				[EVENTS.SessionUpdated]: () => {
 					this.logger.info("✅ Session config updated");
-					this.sendInitialGreeting();
+					if (!this.initialGreetingSent) {
+						this.initialGreetingSent = true;
+						this.sendInitialGreeting();
+					}
 				},
 
 				[EVENTS.ResponseAudioDelta]: (e) => this.handleAudioDelta(e),
@@ -347,11 +540,26 @@ export class TwilioSession {
 					);
 					break;
 
-				case "start":
+				case "start": {
 					this.streamSid = msg.streamSid;
 					this.callSid = msg.start.callSid;
+					const params = msg.start.customParameters ?? {};
+					const raw =
+						typeof params.callerPhone === "string"
+							? params.callerPhone
+							: typeof params.from === "string"
+								? params.from
+								: "";
+					const trimmed = raw.trim();
+					this.callerPhone = trimmed.length > 0 ? trimmed : null;
+
 					this.logger.info(
-						{ streamSid: this.streamSid, callSid: this.callSid },
+						{
+							streamSid: this.streamSid,
+							callSid: this.callSid,
+							hasCallerPhone: Boolean(this.callerPhone),
+							callerPhone: this.callerPhone,
+						},
 						"📞 Twilio stream started",
 					);
 					this.broadcastDashboard({
@@ -359,7 +567,13 @@ export class TwilioSession {
 						callSid: this.callSid,
 						timestamp: new Date().toISOString(),
 					});
+
+					// Caller may arrive after OpenAI is connected; refresh instructions without re-greeting
+					if (this.openAIWs?.readyState === WebSocket.OPEN) {
+						this.sendSessionConfig();
+					}
 					break;
+				}
 
 				case "media":
 					this.latestMediaTimestamp = parseInt(msg.media.timestamp, 10);
@@ -491,6 +705,20 @@ export class TwilioSession {
 
 	// ==================== Function Calling ====================
 
+	private sendFunctionCallOutput(call_id: string, output: string) {
+		this.openAIWs.send(
+			JSON.stringify({
+				type: "conversation.item.create",
+				item: {
+					type: "function_call_output",
+					call_id,
+					output,
+				},
+			}),
+		);
+		this.openAIWs.send(JSON.stringify({ type: "response.create" }));
+	}
+
 	private async handleFunctionCall(event: {
 		call_id: string;
 		name?: string;
@@ -498,14 +726,67 @@ export class TwilioSession {
 	}) {
 		const { call_id, name, arguments: args } = event;
 
-		this.logger.info({ call_id, name, args }, "🔧 Function call received");
-
-		if (!args || !name) {
-			this.logger.warn({ call_id }, "🟠 Missing function name or arguments");
+		if (!name) {
+			console.log(
+				"---------------------- TOOL SKIP (missing name) ----------------------",
+			);
+			console.log("call_id:", call_id, "callSid:", this.callSid);
+			console.log(
+				"-------------------------------------------------------------",
+			);
+			return;
+		}
+		if (args === undefined || args === null || args === "") {
+			console.log(
+				"---------------------- TOOL SKIP (missing args) ----------------------",
+			);
+			console.log("call_id:", call_id, "callSid:", this.callSid, "tool:", name);
+			console.log(
+				"-------------------------------------------------------------",
+			);
 			return;
 		}
 
-		// Broadcast to dashboard
+		let parsedArgs: unknown;
+		try {
+			parsedArgs = JSON.parse(args);
+		} catch (parseErr) {
+			console.log(
+				"---------------------- TOOL INVALID JSON ----------------------",
+			);
+			console.log("tool:", name, "call_id:", call_id, "callSid:", this.callSid);
+			console.log("args:", truncateForLog(args));
+			console.log("parseError:", parseErr);
+			console.log(
+				"-------------------------------------------------------------",
+			);
+			if (this.callSid) {
+				this.broadcastDashboard({
+					type: "function_call",
+					callSid: this.callSid,
+					name,
+					args,
+					status: "error",
+					result: "Invalid JSON in tool arguments",
+				});
+			}
+			this.sendFunctionCallOutput(
+				call_id,
+				JSON.stringify({
+					error: true,
+					message: `${name}: invalid JSON arguments`,
+				}),
+			);
+			return;
+		}
+
+		console.log("---------------------- TOOL INVOKE ----------------------");
+		console.log("callSid:", this.callSid, "call_id:", call_id, "tool:", name);
+		console.log("input:", JSON.stringify(parsedArgs, null, 2));
+		console.log(
+			"-------------------------------------------------------------",
+		);
+
 		if (this.callSid) {
 			this.broadcastDashboard({
 				type: "function_call",
@@ -526,19 +807,70 @@ export class TwilioSession {
 				case "get_cities":
 					result = this.getCities();
 					break;
-				case "find_available_slots":
-					result = await this.findAvailableSlots(JSON.parse(args));
+				case "find_available_slots": {
+					const slotArgs = normalizeFindAvailableSlotsArgs(parsedArgs);
+					if (!slotArgs) {
+						result = JSON.stringify({
+							error: true,
+							message:
+								"find_available_slots: invalid arguments (expected speciality_slug, latitude, longitude, optional preferred_time)",
+						});
+						break;
+					}
+					result = await this.findAvailableSlots(slotArgs);
 					break;
-				case "book_appointment":
-					result = await this.bookAppointment(JSON.parse(args));
+				}
+				case "book_appointment": {
+					const bookArgs = normalizeBookAppointmentArgs(parsedArgs);
+					if (!bookArgs) {
+						result = JSON.stringify({
+							error: true,
+							message:
+								"book_appointment: invalid arguments (expected doctor_id, patient_name, phone_number, illness, start, end)",
+						});
+						break;
+					}
+					result = await this.bookAppointment(bookArgs);
 					break;
+				}
 				default:
+					console.log(
+						"---------------------- UNKNOWN TOOL ----------------------",
+					);
+					console.log("tool:", name, "call_id:", call_id, "input:", parsedArgs);
+					console.log(
+						"-------------------------------------------------------------",
+					);
 					result = JSON.stringify({ error: `Unknown function: ${name}` });
 			}
 
-			this.logger.info({ call_id, name, result }, "✅ Function call result");
+			if (name === "get_specialities" || name === "get_cities") {
+				console.log(
+					"---------------------- TOOL SUCCESS ----------------------",
+				);
+				console.log(
+					"tool:",
+					name,
+					"call_id:",
+					call_id,
+					"resultChars:",
+					result.length,
+				);
+				console.log(
+					"-------------------------------------------------------------",
+				);
+			} else {
+				console.log(
+					"---------------------- TOOL SUCCESS ----------------------",
+				);
+				console.log("tool:", name, "call_id:", call_id);
+				console.log("input:", JSON.stringify(parsedArgs, null, 2));
+				console.log("result:", truncateForLog(result));
+				console.log(
+					"-------------------------------------------------------------",
+				);
+			}
 
-			// Broadcast success to dashboard
 			if (this.callSid) {
 				this.broadcastDashboard({
 					type: "function_call",
@@ -550,25 +882,27 @@ export class TwilioSession {
 				});
 			}
 
-			// Send result back to OpenAI
-			this.openAIWs.send(
-				JSON.stringify({
-					type: "conversation.item.create",
-					item: {
-						type: "function_call_output",
-						call_id,
-						output: result,
-					},
-				}),
+			this.sendFunctionCallOutput(call_id, result);
+		} catch (error: unknown) {
+			consoleLogToolHttpError(
+				name,
+				{
+					callSid: this.callSid,
+					call_id,
+					input: parsedArgs,
+				},
+				error,
 			);
 
-			// Trigger OpenAI to continue the conversation based on the result
-			this.openAIWs.send(JSON.stringify({ type: "response.create" }));
-			// biome-ignore lint/suspicious/noExplicitAny: ignore
-		} catch (error: any) {
-			this.logger.error({ error, call_id, name }, "🔥 Function call failed");
+			const reason = toolFailureMessage(name, error);
+			console.log(
+				"---------------------- TOOL FAILED (summary) ----------------------",
+			);
+			console.log(reason);
+			console.log(
+				"-------------------------------------------------------------",
+			);
 
-			// Broadcast error to dashboard
 			if (this.callSid) {
 				this.broadcastDashboard({
 					type: "function_call",
@@ -576,26 +910,17 @@ export class TwilioSession {
 					name,
 					args,
 					status: "error",
-					result: error.message,
+					result: reason,
 				});
 			}
 
-			// Send error back to OpenAI so it can inform the patient
-			this.openAIWs.send(
+			this.sendFunctionCallOutput(
+				call_id,
 				JSON.stringify({
-					type: "conversation.item.create",
-					item: {
-						type: "function_call_output",
-						call_id,
-						output: JSON.stringify({
-							error: true,
-							message: `Failed to ${name}: ${error.message}`,
-						}),
-					},
+					error: true,
+					message: reason,
 				}),
 			);
-
-			this.openAIWs.send(JSON.stringify({ type: "response.create" }));
 		}
 	}
 
@@ -626,26 +951,40 @@ export class TwilioSession {
 	}
 
 	private async findAvailableSlots(params: {
-		speciality_slug: string;
+		specialitySlug: string;
 		latitude: number;
 		longitude: number;
-		preferred_time?: string;
+		preferredTime?: string;
 	}): Promise<string> {
-		this.logger.info({ params }, "🔍 Finding available slots");
+		const url = `${NEXTJS_API_URL}/api/doctors/best-fit`;
+		// Next route expects query keys: speciality, lat, long, time
+		const query = {
+			speciality: params.specialitySlug,
+			lat: params.latitude,
+			long: params.longitude,
+			time: params.preferredTime,
+		};
 
-		const { data } = await axios.get<BestFitDoctor[]>(
-			`http://localhost:3000/api/doctors/best-fit`,
-			{
-				params: {
-					speciality: params.speciality_slug,
-					lat: params.latitude,
-					long: params.longitude,
-					time: params.preferred_time,
-				},
-			},
+		console.log(
+			"---------------------- find_available_slots REQUEST ----------------------",
+		);
+		console.log("url:", url);
+		console.log("query:", JSON.stringify(query, null, 2));
+		console.log(
+			"-------------------------------------------------------------",
 		);
 
+		const { data } = await axios.get<BestFitDoctor[]>(url, { params: query });
+
 		if (!data || data.length === 0) {
+			console.log(
+				"---------------------- find_available_slots EMPTY ----------------------",
+			);
+			console.log("query:", JSON.stringify(query, null, 2));
+			console.log("doctorCount:", data?.length ?? 0);
+			console.log(
+				"-------------------------------------------------------------",
+			);
 			return JSON.stringify({
 				found: false,
 				message:
@@ -653,46 +992,94 @@ export class TwilioSession {
 			});
 		}
 
-		// Return top 3 for the AI to present
+		// Return top 3 for the AI (doctorId = doctorProfile.id for book_appointment)
 		const top = data.slice(0, 3).map((doc) => ({
-			doctor_id: doc._id,
+			doctorId: doc.id,
 			name: `Dr. ${doc.firstName} ${doc.lastName}`,
 			cabinet: doc.cabinetName,
-			distance_km: Math.round(doc.distance * 10) / 10,
-			slot_start: doc.nextSlot.start,
-			slot_end: doc.nextSlot.end,
+			distanceKm: Math.round(doc.distance * 10) / 10,
+			slotStart: doc.nextSlot.start,
+			slotEnd: doc.nextSlot.end,
 		}));
+
+		console.log(
+			"---------------------- find_available_slots OK ----------------------",
+		);
+		console.log("totalMatches:", data.length, "returned:", top.length);
+		console.log(
+			"doctorIds:",
+			top.map((d) => d.doctorId),
+		);
+		console.log("top:", JSON.stringify(top, null, 2));
+		console.log(
+			"-------------------------------------------------------------",
+		);
 
 		return JSON.stringify({ found: true, doctors: top });
 	}
 
 	private async bookAppointment(params: {
-		doctor_id: string;
-		patient_name: string;
-		phone_number: string;
+		doctorId: number | string;
+		patientName: string;
+		phoneNumber: string;
 		illness: string;
 		start: string;
 		end: string;
 	}): Promise<string> {
-		this.logger.info({ params }, "📅 Booking appointment");
-
-		console.log("-------------------- params --------------------");
-		console.log(params);
-
-		const { data } = await axios.post(
-			`${NEXTJS_API_URL}/api/appointments/external`,
-			{
-				doctor: params.doctor_id,
-				name: params.patient_name,
-				phoneNumber: params.phone_number,
-				illness: params.illness,
-				start: params.start,
-				end: params.end,
-			},
+		console.log(
+			"---------------------- book_appointment INPUT ----------------------",
+		);
+		console.log(JSON.stringify(params, null, 2));
+		console.log(
+			"-------------------------------------------------------------",
 		);
 
-		console.log("-------------------- data --------------------");
+		const doctorId = Number(params.doctorId);
+		if (
+			!Number.isFinite(doctorId) ||
+			doctorId <= 0 ||
+			!Number.isInteger(doctorId)
+		) {
+			const msg = `Invalid doctorId: expected a positive integer (from find_available_slots doctorId), got ${JSON.stringify(params.doctorId)}`;
+			console.log(
+				"---------------------- book_appointment VALIDATION ERROR ----------------------",
+			);
+			console.log("params:", JSON.stringify(params, null, 2));
+			console.log("doctorIdParsed:", doctorId);
+			console.log(
+				"-------------------------------------------------------------",
+			);
+			throw new Error(msg);
+		}
+
+		const body: BookAppointmentParams = {
+			doctorId,
+			name: params.patientName,
+			phoneNumber: params.phoneNumber,
+			illness: params.illness,
+			start: params.start,
+			end: params.end,
+		};
+
+		const bookUrl = `${NEXTJS_API_URL}/api/appointments/external`;
+		console.log(
+			"---------------------- book_appointment REQUEST ----------------------",
+		);
+		console.log("url:", bookUrl);
+		console.log("body:", JSON.stringify(body, null, 2));
+		console.log(
+			"-------------------------------------------------------------",
+		);
+
+		const { data } = await axios.post(bookUrl, body);
+
+		console.log(
+			"---------------------- book_appointment RESPONSE ----------------------",
+		);
 		console.log(data);
+		console.log(
+			"-------------------------------------------------------------",
+		);
 
 		// Broadcast to dashboard
 		if (this.callSid) {
@@ -703,10 +1090,14 @@ export class TwilioSession {
 			});
 		}
 
+		// biome-ignore lint/suspicious/noExplicitAny: API row shape varies
+		const row = data as any;
+		const appointmentId = row?.id ?? row?._id;
+
 		return JSON.stringify({
 			success: true,
-			appointment_id: data._id,
-			status: data.status,
+			appointment_id: appointmentId,
+			status: row?.status,
 			message: "Appointment created successfully with pending status.",
 		});
 	}

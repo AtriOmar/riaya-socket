@@ -19,6 +19,15 @@ const logger = pino({
 const app = express();
 const server = http.createServer(app);
 
+/** Escape for use inside TwiML double-quoted attribute values */
+function escapeXmlAttr(value: string): string {
+	return value
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;");
+}
+
 // Two WebSocket servers: one for Twilio media streams, one for dashboard monitoring
 const twilioWss = new WebSocketServer({ noServer: true });
 const dashboardWss = new WebSocketServer({ noServer: true });
@@ -37,18 +46,35 @@ app.get("/", (_req: Request, res: Response) => {
 });
 
 // Twilio webhook: returns TwiML to connect the call to a media stream
-app.all("/incoming-call", (_req: Request, res: Response) => {
-	// const host = req.headers.host;
+app.all("/incoming-call", (req: Request, res: Response) => {
+	// Host for wss://…/media-stream must reach THIS realtime server (ngrok/tunnel), not Next.js.
+	const fromEnv = process.env.PUBLIC_SOCKET_HOST?.trim()
+		.replace(/^https?:\/\//i, "")
+		.replace(/\/$/, "");
 	const host =
-		process.env.NEXTJS_API_URL?.replace("https://", "") ||
-		"rqpwn4z7-8080.euw.devtunnels.ms";
-	logger.info({ host }, "📞 Incoming call webhook");
+		fromEnv ||
+		req.get("host")?.trim() ||
+		"localhost:8080";
+
+	const fromRaw =
+		typeof req.body?.From === "string"
+			? req.body.From
+			: typeof req.query.From === "string"
+				? req.query.From
+				: "";
+	const from = fromRaw.trim();
+	const callerParameter =
+		from.length > 0
+			? `\n    <Parameter name="callerPhone" value="${escapeXmlAttr(from)}" />`
+			: "";
+
+	logger.info({ host, hasCallerPhone: from.length > 0 }, "📞 Incoming call webhook");
 
 	const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-//   <Say voice="Google.en-US-Chirp3-HD-Aoede">Just a minute</Say>
   <Connect>
-    <Stream url="wss://${host}/media-stream" />
+    <Stream url="wss://${host}/media-stream">${callerParameter}
+    </Stream>
   </Connect>
 </Response>`;
 

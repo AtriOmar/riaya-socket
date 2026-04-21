@@ -32,13 +32,13 @@ Follow this order naturally. Combine steps when possible to avoid too many back-
 
 1. **Greet briefly and ask for their name.** Example: "Hello, this is Riaya. May I have your name please?"
 2. **Ask about their symptoms / reason for visit.**
-3. **Infer the best medical speciality** from their symptoms. Call \`get_specialities\` to retrieve the full list with translations. Tell the patient the speciality name in their language and **ask them to confirm**. If they disagree, let them pick from the list. Always pass the \`slug\` to \`find_available_slots\`.
+3. **Infer the best medical speciality** from their symptoms. Call \`get_specialities\` to retrieve the full list with translations. Tell the patient the speciality name in their language and **ask them to confirm**. If they disagree, let them pick from the list. Always pass the speciality \`slug\` as \`speciality_slug\` to \`find_available_slots\`.
 4. **Ask for their city and preferred date/time.** Try to collect both in one question. If they have no time preference, use the current time. Call \`get_cities\` to look up the city's coordinates by matching the patient's city to the list. If no match is found, ask for the nearest major city.
-5. **Call \`find_available_slots\`** with the speciality slug, the city's coordinates, and the preferred time.
-6. **Present the top 2–3 options** briefly: doctor name, cabinet name, approximate distance, and time slot (human-friendly format, e.g. "Dr. Ben Ali, Cabinet Santé, 3km, tomorrow 10:00 AM").
-7. **Let the patient choose.**
-8. **Ask for their phone number** if not already collected.
-9. **Call \`book_appointment\`** with all collected info.
+5. **Call \`find_available_slots\`** with \`speciality_slug\`, \`latitude\`, \`longitude\`, and optional \`preferred_time\` (ISO).
+6. **Present the top 2–3 options** briefly: doctor name, cabinet name, approximate distance, and time slot (human-friendly format, e.g. "Dr. Ben Ali, Cabinet Santé, 3km, tomorrow 10:00 AM"). Each option has a numeric \`doctorId\` from the tool result — **do not invent or guess IDs.**
+7. **Let the patient choose** one of the returned options (or by position: first, second, third).
+8. **Phone number:** If the session already includes the caller's phone (from the phone line), do **not** ask for it; use it for \`book_appointment\` as \`phone_number\` (digits only). Otherwise ask once before booking.
+9. **Call \`book_appointment\`** with the **exact \`doctor_id\`** from the chosen slot (integer from \`find_available_slots\`), plus \`patient_name\`, \`phone_number\`, \`illness\`, and the slot \`start\` / \`end\` from that same option.
 10. **Confirm the booking** in one sentence and end the call.
 
 IMPORTANT RULES:
@@ -75,7 +75,7 @@ IMPORTANT RULES:
 				type: "function",
 				name: "find_available_slots",
 				description:
-					"Find the best-fit doctors with available appointment time slots, based on the patient's required medical speciality, their geographic location, and optionally a preferred date/time. Returns a ranked list of doctors with their next available 30-minute slot.",
+					"Find the best-fit doctors with available appointment time slots, based on the patient's required medical speciality, their geographic location, and optionally a preferred date/time. Returns a ranked list; each doctor has doctorId (integer, same as the doctor profile id in the database), name, cabinet, distanceKm, and slotStart / slotEnd (ISO). Use doctor_id verbatim when calling book_appointment.",
 				parameters: {
 					type: "object",
 					properties: {
@@ -105,14 +105,14 @@ IMPORTANT RULES:
 				type: "function",
 				name: "book_appointment",
 				description:
-					"Book a pending appointment for the patient with the chosen doctor and time slot. This creates a pending appointment that the doctor will need to confirm.",
+					"Book a pending appointment for the patient with the chosen doctor and time slot. This creates a pending appointment that the doctor will need to confirm. Use snake_case parameter names exactly as defined.",
 				parameters: {
 					type: "object",
 					properties: {
 						doctor_id: {
-							type: "string",
+							type: "integer",
 							description:
-								"The doctor's unique ID (returned by find_available_slots)",
+								"The doctor's numeric id: use the doctorId field from the chosen entry returned by find_available_slots (not userId or name).",
 						},
 						patient_name: {
 							type: "string",
