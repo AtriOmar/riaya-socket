@@ -6,6 +6,7 @@ import express, {
 } from "express";
 import { pino } from "pino";
 import { type WebSocket, WebSocketServer } from "ws";
+import { ensureCallRow } from "./callsApi.js";
 import { getSystemMessage } from "./systemMessages.js";
 import { TwilioSession } from "./twilioSession.js";
 
@@ -51,24 +52,40 @@ app.all("/incoming-call", (req: Request, res: Response) => {
 	const fromEnv = process.env.PUBLIC_SOCKET_HOST?.trim()
 		.replace(/^https?:\/\//i, "")
 		.replace(/\/$/, "");
-	const host =
-		fromEnv ||
-		req.get("host")?.trim() ||
-		"localhost:8080";
+	const host = fromEnv || req.get("host")?.trim() || "localhost:8080";
 
-	const fromRaw =
-		typeof req.body?.From === "string"
-			? req.body.From
-			: typeof req.query.From === "string"
-				? req.query.From
-				: "";
-	const from = fromRaw.trim();
+	const pickStr = (key: string): string => {
+		const v =
+			typeof req.body?.[key] === "string"
+				? req.body[key]
+				: typeof req.query?.[key] === "string"
+					? (req.query[key] as string)
+					: "";
+		return v.trim();
+	};
+
+	const from = pickStr("From");
+	const to = pickStr("To");
+	const direction = pickStr("Direction");
+	const callSid = pickStr("CallSid");
+
 	const callerParameter =
 		from.length > 0
 			? `\n    <Parameter name="callerPhone" value="${escapeXmlAttr(from)}" />`
 			: "";
 
-	logger.info({ host, hasCallerPhone: from.length > 0 }, "📞 Incoming call webhook");
+	logger.info(
+		{ host, hasCallerPhone: from.length > 0, callSid },
+		"📞 Incoming call webhook",
+	);
+
+	// Fire-and-forget: create the call row in Next.js. TwilioSession will
+	// await the same promise (cached by callSid) before persisting events.
+	if (callSid) {
+		ensureCallRow({ callSid, from, to, direction }).catch((err) =>
+			logger.error({ err }, "🔥 Failed to create call row"),
+		);
+	}
 
 	const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>

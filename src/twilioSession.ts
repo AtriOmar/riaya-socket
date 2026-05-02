@@ -3,8 +3,10 @@ import axios from "axios";
 import { config } from "dotenv";
 import type { Logger } from "pino";
 import { type RawData, WebSocket } from "ws";
+import { createCallEvent, ensureCallRow, updateCall } from "./callsApi.js";
 import { CITIES } from "./constants/cities.js";
 import { SPECIALITIES } from "./constants/specialities.js";
+import { nextjsApi } from "./nextjsApiClient.js";
 import type {
 	BestFitDoctor,
 	BookAppointmentParams,
@@ -21,13 +23,7 @@ const {
 	OPENAI_ENDPOINT,
 	OPENAI_MODEL,
 	OPENAI_API_VERSION,
-	NEXTJS_API_URL: NEXTJS_API_URL_RAW,
 } = process.env as Record<string, string>;
-
-/** Base URL of the Next.js app (REST only). Not the public socket/ngrok URL. */
-const NEXTJS_API_URL = (NEXTJS_API_URL_RAW || "http://localhost:3000")
-	.trim()
-	.replace(/\/$/, "");
 
 // ==================== Session Config ====================
 
@@ -36,7 +32,14 @@ const SESSION_CONFIG = {
 	voice: "ash",
 	input_audio_format: "g711_ulaw",
 	output_audio_format: "g711_ulaw",
-	input_audio_transcription: { model: "whisper-1" },
+	input_audio_transcription: {
+		model: process.env.INPUT_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-transcribe",
+		prompt:
+			"The audio may be in Tunisian Arabic (Tunisian Derja), English, or French — transcribe in whatever language the caller uses; do not translate to another language. " +
+			"Context: patients calling Riaya, a healthcare platform in Tunisia, to book doctor appointments by phone. " +
+			"Expect symptoms and reasons for visit; medical speciality names; Tunisian city and neighborhood names; doctor and clinic (cabinet) names; " +
+			"dates and times patients mention (often Tunisia local time, GMT+1); booking and confirmation phrases; phone numbers and people's names.",
+	},
 	turn_detection: {
 		type: "server_vad",
 		threshold: parseFloat(process.env.VAD_THRESHOLD || "0.5"),
@@ -166,8 +169,7 @@ function normalizeFindAvailableSlotsArgs(
 	if (raw === null || typeof raw !== "object" || Array.isArray(raw))
 		return null;
 	const o = raw as Record<string, unknown>;
-	const specialitySlug =
-		strField(o, "speciality_slug", "specialitySlug") ?? "";
+	const specialitySlug = strField(o, "speciality_slug", "specialitySlug") ?? "";
 	const latitude = numField(o, "latitude", "latitude");
 	const longitude = numField(o, "longitude", "longitude");
 	const preferredTime = strField(o, "preferred_time", "preferredTime");
@@ -262,6 +264,10 @@ export class TwilioSession {
 
 	/** Only the first session.update should trigger the opening greeting */
 	private initialGreetingSent = false;
+
+	/** Next.js DB row id for this call (available once ensureCallRow resolves). */
+	private dbCallIdPromise: Promise<number | null> | null = null;
+	private callStartedAt: Date | null = null;
 
 	constructor(
 		private readonly twilioWs: WebSocket,
@@ -446,13 +452,20 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 
 				[EVENTS.ResponseAudioTranscriptDone]: (e) => {
 					if (this.callSid) {
+						const finalText = e.transcript || this.currentAiTranscript;
 						this.broadcastDashboard({
 							type: "ai_transcript",
 							callSid: this.callSid,
-							text: e.transcript || this.currentAiTranscript,
+							text: finalText,
 							delta: "",
 							isFinal: true,
 						});
+						if (finalText) {
+							this.persistEvent({
+								type: "ai_transcript",
+								content: finalText,
+							});
+						}
 						this.currentAiTranscript = "";
 					}
 				},
@@ -469,6 +482,10 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 							text: e.transcript,
 							isFinal: true,
 						});
+						this.persistEvent({
+							type: "patient_transcript",
+							content: e.transcript,
+						});
 					}
 				},
 
@@ -483,11 +500,13 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 				[EVENTS.Error]: (e) => {
 					this.logger.error({ error: e.error }, "🔥 OpenAI error");
 					if (this.callSid) {
+						const message = e.error?.message || "OpenAI error";
 						this.broadcastDashboard({
 							type: "error",
 							callSid: this.callSid,
-							message: e.error?.message || "OpenAI error",
+							message,
 						});
+						this.persistEvent({ type: "error", content: message });
 					}
 				},
 
@@ -513,10 +532,24 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 		this.twilioWs.on("close", () => {
 			this.logger.info("🔴 Twilio WebSocket closed");
 			if (this.callSid) {
+				const endedAt = new Date();
+				const duration = this.callStartedAt
+					? Math.max(
+							0,
+							Math.floor(
+								(endedAt.getTime() - this.callStartedAt.getTime()) / 1000,
+							),
+						)
+					: undefined;
 				this.broadcastDashboard({
 					type: "call_end",
 					callSid: this.callSid,
-					timestamp: new Date().toISOString(),
+					timestamp: endedAt.toISOString(),
+				});
+				this.persistCallUpdate({
+					status: "completed",
+					endedAt: endedAt.toISOString(),
+					...(duration !== undefined ? { duration } : {}),
 				});
 			}
 			this.dispose();
@@ -552,6 +585,13 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 								: "";
 					const trimmed = raw.trim();
 					this.callerPhone = trimmed.length > 0 ? trimmed : null;
+					this.callStartedAt = new Date();
+
+					// Ensure DB row exists (idempotent — /incoming-call likely already started this).
+					this.dbCallIdPromise = ensureCallRow({
+						callSid: this.callSid,
+						from: this.callerPhone ?? undefined,
+					});
 
 					this.logger.info(
 						{
@@ -565,7 +605,7 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 					this.broadcastDashboard({
 						type: "call_start",
 						callSid: this.callSid,
-						timestamp: new Date().toISOString(),
+						timestamp: this.callStartedAt.toISOString(),
 					});
 
 					// Caller may arrive after OpenAI is connected; refresh instructions without re-greeting
@@ -769,6 +809,13 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 					status: "error",
 					result: "Invalid JSON in tool arguments",
 				});
+				this.persistEvent({
+					type: "function_call",
+					functionName: name,
+					functionArgs: args,
+					functionResult: "Invalid JSON in tool arguments",
+					functionStatus: "error",
+				});
 			}
 			this.sendFunctionCallOutput(
 				call_id,
@@ -794,6 +841,12 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 				name,
 				args,
 				status: "calling",
+			});
+			this.persistEvent({
+				type: "function_call",
+				functionName: name,
+				functionArgs: parsedArgs,
+				functionStatus: "calling",
 			});
 		}
 
@@ -880,6 +933,20 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 					status: "success",
 					result,
 				});
+				const parsedResult = (() => {
+					try {
+						return JSON.parse(result);
+					} catch {
+						return result;
+					}
+				})();
+				this.persistEvent({
+					type: "function_call",
+					functionName: name,
+					functionArgs: parsedArgs,
+					functionResult: parsedResult,
+					functionStatus: "success",
+				});
 			}
 
 			this.sendFunctionCallOutput(call_id, result);
@@ -911,6 +978,13 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 					args,
 					status: "error",
 					result: reason,
+				});
+				this.persistEvent({
+					type: "function_call",
+					functionName: name,
+					functionArgs: parsedArgs,
+					functionResult: reason,
+					functionStatus: "error",
 				});
 			}
 
@@ -956,7 +1030,7 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 		longitude: number;
 		preferredTime?: string;
 	}): Promise<string> {
-		const url = `${NEXTJS_API_URL}/api/doctors/best-fit`;
+		const path = "/api/doctors/best-fit";
 		// Next route expects query keys: speciality, lat, long, time
 		const query = {
 			speciality: params.specialitySlug,
@@ -968,13 +1042,15 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 		console.log(
 			"---------------------- find_available_slots REQUEST ----------------------",
 		);
-		console.log("url:", url);
+		console.log("url:", nextjsApi.getUri({ url: path, params: query }));
 		console.log("query:", JSON.stringify(query, null, 2));
 		console.log(
 			"-------------------------------------------------------------",
 		);
 
-		const { data } = await axios.get<BestFitDoctor[]>(url, { params: query });
+		const { data } = await nextjsApi.get<BestFitDoctor[]>(path, {
+			params: query,
+		});
 
 		if (!data || data.length === 0) {
 			console.log(
@@ -997,6 +1073,7 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 			doctorId: doc.id,
 			name: `Dr. ${doc.firstName} ${doc.lastName}`,
 			cabinet: doc.cabinetName,
+			address: doc.address ?? null,
 			distanceKm: Math.round(doc.distance * 10) / 10,
 			slotStart: doc.nextSlot.start,
 			slotEnd: doc.nextSlot.end,
@@ -1061,17 +1138,17 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 			end: params.end,
 		};
 
-		const bookUrl = `${NEXTJS_API_URL}/api/appointments/external`;
+		const bookPath = "/api/appointments/external";
 		console.log(
 			"---------------------- book_appointment REQUEST ----------------------",
 		);
-		console.log("url:", bookUrl);
+		console.log("url:", `${nextjsApi.defaults.baseURL}${bookPath}`);
 		console.log("body:", JSON.stringify(body, null, 2));
 		console.log(
 			"-------------------------------------------------------------",
 		);
 
-		const { data } = await axios.post(bookUrl, body);
+		const { data } = await nextjsApi.post(bookPath, body);
 
 		console.log(
 			"---------------------- book_appointment RESPONSE ----------------------",
@@ -1081,6 +1158,10 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 			"-------------------------------------------------------------",
 		);
 
+		// biome-ignore lint/suspicious/noExplicitAny: API row shape varies
+		const row = data as any;
+		const appointmentId = row?.id ?? row?._id;
+
 		// Broadcast to dashboard
 		if (this.callSid) {
 			this.broadcastDashboard({
@@ -1088,11 +1169,16 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 				callSid: this.callSid,
 				data,
 			});
+			this.persistEvent({
+				type: "appointment_booked",
+				content: `Appointment #${appointmentId ?? "?"} booked`,
+				functionResult: data,
+			});
+			this.persistCallUpdate({
+				appointmentId: appointmentId ?? null,
+				callerName: params.patientName,
+			});
 		}
-
-		// biome-ignore lint/suspicious/noExplicitAny: API row shape varies
-		const row = data as any;
-		const appointmentId = row?.id ?? row?._id;
 
 		return JSON.stringify({
 			success: true,
@@ -1100,6 +1186,29 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 			status: row?.status,
 			message: "Appointment created successfully with pending status.",
 		});
+	}
+
+	// ==================== DB Persistence Helpers ====================
+
+	private async withCallId(
+		fn: (callId: number) => Promise<void>,
+	): Promise<void> {
+		if (!this.dbCallIdPromise) return;
+		try {
+			const id = await this.dbCallIdPromise;
+			if (id == null) return;
+			await fn(id);
+		} catch (err) {
+			this.logger.error({ err }, "🔥 DB persistence error");
+		}
+	}
+
+	private persistEvent(event: Parameters<typeof createCallEvent>[1]): void {
+		void this.withCallId((id) => createCallEvent(id, event));
+	}
+
+	private persistCallUpdate(update: Parameters<typeof updateCall>[1]): void {
+		void this.withCallId((id) => updateCall(id, update));
 	}
 
 	// ==================== Dashboard Broadcasting ====================

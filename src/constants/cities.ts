@@ -1,6 +1,5 @@
 export const CITIES = [
 	{
-		id: 1,
 		postal_code: 3027,
 		latitude: 34.74058132705946,
 		longitude: 10.77451432600121,
@@ -10,7 +9,6 @@ export const CITIES = [
 		slug: "sfax",
 	},
 	{
-		id: 2,
 		postal_code: 2000,
 		latitude: 36.82622567634348,
 		longitude: 10.189454159483818,
@@ -20,7 +18,6 @@ export const CITIES = [
 		slug: "tunis",
 	},
 	{
-		id: 3,
 		postal_code: 8000,
 		latitude: 36.469421645240104,
 		longitude: 10.723408763353692,
@@ -30,7 +27,6 @@ export const CITIES = [
 		slug: "nabeul",
 	},
 	{
-		id: 4,
 		postal_code: 2100,
 		latitude: 36.00908383258914,
 		longitude: 10.011486275887933,
@@ -40,7 +36,6 @@ export const CITIES = [
 		slug: "gafsa",
 	},
 	{
-		id: 5,
 		postal_code: 2080,
 		latitude: 35.97922043804636,
 		longitude: 9.984268167618502,
@@ -50,7 +45,6 @@ export const CITIES = [
 		slug: "ariana",
 	},
 	{
-		id: 6,
 		postal_code: 2050,
 		latitude: 35.99786142296842,
 		longitude: 9.978385658822173,
@@ -60,7 +54,6 @@ export const CITIES = [
 		slug: "ben_arous",
 	},
 	{
-		id: 7,
 		postal_code: 4000,
 		latitude: 35.81764769849473,
 		longitude: 10.621510736134493,
@@ -70,7 +63,6 @@ export const CITIES = [
 		slug: "sousse",
 	},
 	{
-		id: 8,
 		postal_code: 7000,
 		latitude: 37.27149281859591,
 		longitude: 9.889265055124033,
@@ -80,7 +72,6 @@ export const CITIES = [
 		slug: "bizerte",
 	},
 	{
-		id: 9,
 		postal_code: 9000,
 		latitude: 36.023842378092084,
 		longitude: 9.994189467071008,
@@ -90,7 +81,6 @@ export const CITIES = [
 		slug: "beja",
 	},
 	{
-		id: 10,
 		postal_code: 9100,
 		latitude: 35.9884652069919,
 		longitude: 10.024212639715458,
@@ -100,7 +90,6 @@ export const CITIES = [
 		slug: "sidi_bouzid",
 	},
 	{
-		id: 11,
 		postal_code: 4170,
 		latitude: 35.99107848362372,
 		longitude: 10.01488534448611,
@@ -110,7 +99,6 @@ export const CITIES = [
 		slug: "medenine",
 	},
 	{
-		id: 12,
 		postal_code: 2011,
 		latitude: 36.01341967198112,
 		longitude: 9.989670397425575,
@@ -120,7 +108,6 @@ export const CITIES = [
 		slug: "manouba",
 	},
 	{
-		id: 13,
 		postal_code: 1100,
 		latitude: 35.999759024042376,
 		longitude: 9.983308757080751,
@@ -130,7 +117,6 @@ export const CITIES = [
 		slug: "zaghouan",
 	},
 	{
-		id: 14,
 		postal_code: 8100,
 		latitude: 35.97735924330429,
 		longitude: 9.979767723357423,
@@ -140,7 +126,6 @@ export const CITIES = [
 		slug: "jendouba",
 	},
 	{
-		id: 15,
 		postal_code: 5100,
 		latitude: 36.01409779107954,
 		longitude: 10.012591451783448,
@@ -150,7 +135,6 @@ export const CITIES = [
 		slug: "mahdia",
 	},
 	{
-		id: 16,
 		postal_code: 7100,
 		latitude: 36.02311340565927,
 		longitude: 10.00101877867925,
@@ -160,7 +144,6 @@ export const CITIES = [
 		slug: "le_kef",
 	},
 	{
-		id: 17,
 		postal_code: 3100,
 		latitude: 35.665106940275926,
 		longitude: 10.114255180342006,
@@ -170,7 +153,6 @@ export const CITIES = [
 		slug: "kairouan",
 	},
 	{
-		id: 18,
 		postal_code: 6000,
 		latitude: 33.885894217974226,
 		longitude: 10.09014272223819,
@@ -180,7 +162,6 @@ export const CITIES = [
 		slug: "gabes",
 	},
 	{
-		id: 19,
 		postal_code: 5080,
 		latitude: 36.01994176597462,
 		longitude: 10.002915014286703,
@@ -190,7 +171,6 @@ export const CITIES = [
 		slug: "monastir",
 	},
 	{
-		id: 20,
 		postal_code: 1200,
 		latitude: 35.9952223125728,
 		longitude: 9.976560777020566,
@@ -200,7 +180,6 @@ export const CITIES = [
 		slug: "kasserine",
 	},
 	{
-		id: 21,
 		postal_code: 6100,
 		latitude: 36.02232656819357,
 		longitude: 10.004177274573985,
@@ -210,7 +189,6 @@ export const CITIES = [
 		slug: "siliana",
 	},
 	{
-		id: 22,
 		postal_code: 3200,
 		latitude: 35.993670750984606,
 		longitude: 9.97811841827462,
@@ -220,7 +198,6 @@ export const CITIES = [
 		slug: "tataouine",
 	},
 	{
-		id: 23,
 		postal_code: 4200,
 		latitude: 36.003158687061244,
 		longitude: 9.995319241095046,
@@ -230,7 +207,6 @@ export const CITIES = [
 		slug: "kebili",
 	},
 	{
-		id: 24,
 		postal_code: 2200,
 		latitude: 33.9197127428092,
 		longitude: 8.133521411205646,

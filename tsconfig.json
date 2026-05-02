@@ -8,7 +8,7 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "moduleResolution": "Node",
-    "incremental": true,
+    // "incremental": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "isolatedModules": true,

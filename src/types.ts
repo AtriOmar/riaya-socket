@@ -131,6 +131,8 @@ export type BestFitDoctor = {
 	userId: string;
 	firstName: string;
 	lastName: string;
+	/** Practice / cabinet street address when stored on the profile */
+	address: string | null;
 	tin: string;
 	status: string;
 	cabinetName: string;
