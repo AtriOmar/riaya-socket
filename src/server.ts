@@ -82,6 +82,10 @@ app.all("/incoming-call", (req: Request, res: Response) => {
 	// Fire-and-forget: create the call row in Next.js. TwilioSession will
 	// await the same promise (cached by callSid) before persisting events.
 	if (callSid) {
+		console.log(
+			"-------------------- callSid ensureCallRow --------------------",
+		);
+		console.log(callSid);
 		ensureCallRow({ callSid, from, to, direction }).catch((err) =>
 			logger.error({ err }, "🔥 Failed to create call row"),
 		);

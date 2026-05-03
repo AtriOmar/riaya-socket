@@ -26,7 +26,10 @@ export type CreateCallInput = {
 
 export function ensureCallRow(input: CreateCallInput): Promise<number | null> {
 	const existing = pendingCallCreations.get(input.callSid);
+	console.log("-------------------- existing --------------------");
+	console.log(existing);
 	if (existing) return existing;
+	console.log("-------------------- no existing --------------------");
 
 	const promise = (async (): Promise<number | null> => {
 		try {
