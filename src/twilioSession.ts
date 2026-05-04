@@ -2,6 +2,7 @@ import { DefaultAzureCredential } from "@azure/identity";
 import axios from "axios";
 import { config } from "dotenv";
 import type { Logger } from "pino";
+import twilio from "twilio";
 import { type RawData, WebSocket } from "ws";
 import { createCallEvent, ensureCallRow, updateCall } from "./callsApi.js";
 import { CITIES } from "./constants/cities.js";
@@ -24,6 +25,19 @@ const {
 	OPENAI_MODEL,
 	OPENAI_API_VERSION,
 } = process.env as Record<string, string>;
+
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+
+let twilioRestClient: ReturnType<typeof twilio> | null = null;
+
+function getTwilioRestClient(): ReturnType<typeof twilio> | null {
+	if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) return null;
+	if (!twilioRestClient) {
+		twilioRestClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+	}
+	return twilioRestClient;
+}
 
 // ==================== Session Config ====================
 
@@ -268,6 +282,9 @@ export class TwilioSession {
 	/** Next.js DB row id for this call (available once ensureCallRow resolves). */
 	private dbCallIdPromise: Promise<number | null> | null = null;
 	private callStartedAt: Date | null = null;
+
+	/** Avoid stacking multiple Twilio REST hangups for one session. */
+	private hangupScheduled = false;
 
 	constructor(
 		private readonly twilioWs: WebSocket,
@@ -745,7 +762,11 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 
 	// ==================== Function Calling ====================
 
-	private sendFunctionCallOutput(call_id: string, output: string) {
+	private sendFunctionCallOutput(
+		call_id: string,
+		output: string,
+		options?: { continueConversation?: boolean },
+	) {
 		this.openAIWs.send(
 			JSON.stringify({
 				type: "conversation.item.create",
@@ -756,7 +777,36 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 				},
 			}),
 		);
+		if (options?.continueConversation === false) return;
 		this.openAIWs.send(JSON.stringify({ type: "response.create" }));
+	}
+
+	private scheduleTwilioHangup() {
+		if (this.hangupScheduled) return;
+		this.hangupScheduled = true;
+		const delay = parseInt(process.env.END_CALL_DELAY_MS || "2500", 10);
+		const callSid = this.callSid;
+		const client = getTwilioRestClient();
+		this.logger.info(
+			{ callSid, delayMs: delay },
+			"📴 Scheduling Twilio call completion",
+		);
+		setTimeout(() => {
+			if (!callSid || !client) {
+				this.hangupScheduled = false;
+				return;
+			}
+			client
+				.calls(callSid)
+				.update({ status: "completed" })
+				.then(() => {
+					this.logger.info({ callSid }, "📴 Twilio call ended");
+				})
+				.catch((err: unknown) => {
+					this.hangupScheduled = false;
+					this.logger.error({ err, callSid }, "🔥 Failed to end Twilio call");
+				});
+		}, delay);
 	}
 
 	private async handleFunctionCall(event: {
@@ -852,6 +902,7 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 
 		try {
 			let result: string;
+			let scheduleHangupAfterOutput = false;
 
 			switch (name) {
 				case "get_specialities":
@@ -859,6 +910,26 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 					break;
 				case "get_cities":
 					result = this.getCities();
+					break;
+				case "end_call":
+					if (!this.callSid) {
+						result = JSON.stringify({
+							error: true,
+							message: "end_call: no active call",
+						});
+					} else if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
+						result = JSON.stringify({
+							error: true,
+							message: "end_call: Twilio credentials not configured",
+						});
+					} else {
+						scheduleHangupAfterOutput = true;
+						result = JSON.stringify({
+							success: true,
+							message:
+								"Hangup scheduled. Do not speak again; the call will disconnect shortly.",
+						});
+					}
 					break;
 				case "find_available_slots": {
 					const slotArgs = normalizeFindAvailableSlotsArgs(parsedArgs);
@@ -949,7 +1020,10 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 				});
 			}
 
-			this.sendFunctionCallOutput(call_id, result);
+			this.sendFunctionCallOutput(call_id, result, {
+				continueConversation: !scheduleHangupAfterOutput,
+			});
+			if (scheduleHangupAfterOutput) this.scheduleTwilioHangup();
 		} catch (error: unknown) {
 			consoleLogToolHttpError(
 				name,

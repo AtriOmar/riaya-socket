@@ -1,41 +1,42 @@
 {
-  "name": "riaya-realtime",
-  "version": "1.0.0",
-  "main": "dist/server.js",
-  "license": "ISC",
-  "description": "Riaya Realtime - Twilio phone call to Azure OpenAI Realtime API bridge for doctor appointment booking",
-  "type": "module",
-  "scripts": {
-    "start": "tsc && node dist/server.js",
-    "build": "tsc",
-    "dev": "tsc && concurrently \"tsc --watch\" \"nodemon dist/server.js\"",
-    "lint": "biome check",
+	"name": "riaya-realtime",
+	"version": "1.0.0",
+	"main": "dist/server.js",
+	"license": "ISC",
+	"description": "Riaya Realtime - Twilio phone call to Azure OpenAI Realtime API bridge for doctor appointment booking",
+	"type": "module",
+	"scripts": {
+		"start": "tsc && node dist/server.js",
+		"build": "tsc",
+		"dev": "tsc && concurrently \"tsc --watch\" \"nodemon dist/server.js\"",
+		"lint": "biome check",
 		"format": "biome format",
 		"fix:lint": "biome check --write",
 		"fix:format": "biome format --write",
 		"fix:all": "biome check --write && biome format --write",
 		"typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@azure/identity": "^4.11.1",
-    "@biomejs/biome": "^2.4.10",
-    "axios": "^1.7.9",
-    "cors": "^2.8.5",
-    "dotenv": "^17.2.2",
-    "express": "^5.1.0",
-    "pino": "^9.9.4",
-    "pino-pretty": "^13.1.1",
-    "ws": "^8.18.3"
-  },
-  "devDependencies": {
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.3",
-    "@types/node": "^24.3.1",
-    "@types/ws": "^8.18.1",
-    "concurrently": "^9.2.1",
-    "nodemon": "^3.1.10",
-    "ts-node": "^10.9.2",
-    "tsx": "^4.20.5",
-    "typescript": "^5.9.2"
-  }
+	},
+	"dependencies": {
+		"@azure/identity": "^4.11.1",
+		"@biomejs/biome": "^2.4.10",
+		"axios": "^1.7.9",
+		"cors": "^2.8.5",
+		"dotenv": "^17.2.2",
+		"express": "^5.1.0",
+		"pino": "^9.9.4",
+		"pino-pretty": "^13.1.1",
+		"twilio": "^6.0.0",
+		"ws": "^8.18.3"
+	},
+	"devDependencies": {
+		"@types/cors": "^2.8.19",
+		"@types/express": "^5.0.3",
+		"@types/node": "^24.3.1",
+		"@types/ws": "^8.18.1",
+		"concurrently": "^9.2.1",
+		"nodemon": "^3.1.10",
+		"ts-node": "^10.9.2",
+		"tsx": "^4.20.5",
+		"typescript": "^5.9.2"
+	}
 }
