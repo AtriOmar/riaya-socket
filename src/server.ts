@@ -9,6 +9,7 @@ import { type WebSocket, WebSocketServer } from "ws";
 import { ensureCallRow } from "./callsApi.js";
 import { getSystemMessage } from "./systemMessages.js";
 import { TwilioSession } from "./twilioSession.js";
+import { WhatsappService, type WhatsappStatus } from "./whatsappService.js";
 
 const PORT = process.env.PORT || 8080;
 
@@ -29,12 +30,29 @@ function escapeXmlAttr(value: string): string {
 		.replace(/"/g, "&quot;");
 }
 
-// Two WebSocket servers: one for Twilio media streams, one for dashboard monitoring
+// Three WebSocket servers: Twilio media streams, dashboard monitoring, WhatsApp admin
 const twilioWss = new WebSocketServer({ noServer: true });
 const dashboardWss = new WebSocketServer({ noServer: true });
+const whatsappWss = new WebSocketServer({ noServer: true });
 
 // Store for dashboard monitoring connections
 const dashboardClients = new Set<WebSocket>();
+
+// Store for WhatsApp admin connections
+const whatsappClients = new Set<WebSocket>();
+
+// WhatsApp service — started after server is listening
+const whatsappService = new WhatsappService();
+
+// Forward WhatsApp status events to all connected admin clients
+whatsappService.on("status", (payload: WhatsappStatus) => {
+	const msg = JSON.stringify(payload);
+	for (const client of whatsappClients) {
+		if (client.readyState === 1 /* OPEN */) {
+			client.send(msg);
+		}
+	}
+});
 
 // ==================== HTTP Routes ====================
 
@@ -44,6 +62,38 @@ app.use(express.urlencoded({ extended: true }));
 // Health check
 app.get("/", (_req: Request, res: Response) => {
 	res.json({ status: "ok", service: "riaya-realtime" });
+});
+
+// WhatsApp connection status — polled by the admin page on load
+app.get("/whatsapp-status", (_req: Request, res: Response) => {
+	const origin = _req.get("origin");
+	const allowed =
+		process.env.CORS_ORIGIN ||
+		process.env.NEXT_API_BASE_URL?.replace("/api", "") ||
+		"";
+	if (origin && allowed && origin === allowed) {
+		res.setHeader("Access-Control-Allow-Origin", origin);
+	}
+	res.json(whatsappService.getStatus());
+});
+
+// Send a WhatsApp message — called by web-ts appointment confirmation
+app.post("/send-whatsapp", async (req: Request, res: Response) => {
+	const { phone, message } = req.body as { phone?: string; message?: string };
+	if (!phone || !message) {
+		res.status(400).json({ error: "phone and message are required" });
+		return;
+	}
+	try {
+		await whatsappService.sendMessage(phone, message);
+		res.json({ ok: true });
+	} catch (err) {
+		logger.error(
+			{ err },
+			"🔥 [WhatsApp] Failed to send message via HTTP route",
+		);
+		res.status(500).json({ error: "Failed to send message" });
+	}
 });
 
 // Twilio webhook: returns TwiML to connect the call to a media stream
@@ -120,6 +170,10 @@ server.on("upgrade", (request, socket, head) => {
 		dashboardWss.handleUpgrade(request, socket, head, (ws) => {
 			dashboardWss.emit("connection", ws, request);
 		});
+	} else if (pathname === "/whatsapp") {
+		whatsappWss.handleUpgrade(request, socket, head, (ws) => {
+			whatsappWss.emit("connection", ws, request);
+		});
 	} else {
 		socket.destroy();
 	}
@@ -163,6 +217,51 @@ dashboardWss.on("connection", (ws: WebSocket) => {
 	);
 });
 
+// ==================== WhatsApp Admin Connections ====================
+
+whatsappWss.on("connection", (ws: WebSocket) => {
+	logger.info("📱 WhatsApp admin client connected");
+	whatsappClients.add(ws);
+
+	// Send the current status immediately so the page doesn't wait for the next event
+	const status = whatsappService.getStatus();
+	if (status.connected) {
+		ws.send(JSON.stringify({ type: "connected", phone: status.phone }));
+	} else {
+		const lastQr = whatsappService.getLastQr();
+		if (lastQr) {
+			ws.send(JSON.stringify({ type: "qr", data: lastQr }));
+		} else {
+			ws.send(JSON.stringify({ type: "disconnected" }));
+		}
+	}
+
+	ws.on("message", async (raw) => {
+		try {
+			const msg = JSON.parse(raw.toString()) as {
+				type: string;
+				phone?: string;
+				message?: string;
+			};
+			if (msg.type === "send_message" && msg.phone && msg.message) {
+				await whatsappService.sendMessage(msg.phone, msg.message);
+			}
+		} catch (err) {
+			logger.error({ err }, "🔥 WhatsApp admin WS message error");
+		}
+	});
+
+	ws.on("close", () => {
+		whatsappClients.delete(ws);
+		logger.info("📱 WhatsApp admin client disconnected");
+	});
+
+	ws.on("error", (error) => {
+		logger.error({ error }, "🔥 WhatsApp admin WebSocket error");
+		whatsappClients.delete(ws);
+	});
+});
+
 // ==================== Error Handling ====================
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
@@ -172,9 +271,15 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 
 // ==================== Start Server ====================
 
-server.listen(PORT, () =>
-	logger.info(`🟢 Riaya Realtime server started on http://localhost:${PORT}`),
-);
+server.listen(PORT, () => {
+	logger.info(`🟢 Riaya Realtime server started on http://localhost:${PORT}`);
+	// Start WhatsApp after the server is up so process errors don't block startup
+	whatsappService
+		.connect()
+		.catch((err) =>
+			logger.error({ err }, "🔥 WhatsApp service failed to start"),
+		);
+});
 
 server.on("close", () => {
 	logger.info("🔴 Server stopped");
