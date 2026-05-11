@@ -12,6 +12,7 @@ import type {
 	BestFitDoctor,
 	BookAppointmentParams,
 	DashboardMessage,
+	DoctorAvailabilityResponse,
 	SystemMessage,
 	TwilioMediaMessage,
 } from "./types.js";
@@ -142,6 +143,12 @@ type FindAvailableSlotsArgs = {
 	preferredTime?: string;
 };
 
+type FindDoctorSlotsArgs = {
+	doctorId: number;
+	preferredTime?: string;
+	limit?: number;
+};
+
 type BookAppointmentToolArgs = {
 	doctorId: number | string;
 	patientName: string;
@@ -193,6 +200,50 @@ function normalizeFindAvailableSlotsArgs(
 		latitude,
 		longitude,
 		...(preferredTime !== undefined ? { preferredTime } : {}),
+	};
+}
+
+/** Accepts snake_case (tool schema) or legacy camelCase; maps to internal shape for HTTP. */
+function normalizeFindDoctorSlotsArgs(
+	raw: unknown,
+): FindDoctorSlotsArgs | null {
+	if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+		return null;
+	const o = raw as Record<string, unknown>;
+	const doctorIdRaw = o.doctor_id ?? o.doctorId;
+	const preferredTime = strField(o, "preferred_time", "preferredTime");
+	const limitRaw = o.limit;
+
+	let doctorId: number | null = null;
+	if (typeof doctorIdRaw === "number") doctorId = doctorIdRaw;
+	if (typeof doctorIdRaw === "string" && doctorIdRaw.trim() !== "") {
+		const parsed = Number(doctorIdRaw);
+		if (Number.isFinite(parsed)) doctorId = parsed;
+	}
+	if (
+		doctorId === null ||
+		!Number.isInteger(doctorId) ||
+		!Number.isFinite(doctorId) ||
+		doctorId <= 0
+	) {
+		return null;
+	}
+
+	let limit: number | undefined;
+	if (typeof limitRaw === "number" && Number.isFinite(limitRaw)) {
+		limit = Math.max(1, Math.min(10, Math.floor(limitRaw)));
+	}
+	if (typeof limitRaw === "string" && limitRaw.trim() !== "") {
+		const parsed = Number(limitRaw);
+		if (Number.isFinite(parsed)) {
+			limit = Math.max(1, Math.min(10, Math.floor(parsed)));
+		}
+	}
+
+	return {
+		doctorId,
+		...(preferredTime !== undefined ? { preferredTime } : {}),
+		...(limit !== undefined ? { limit } : {}),
 	};
 }
 
@@ -374,9 +425,7 @@ export class TwilioSession {
 		if (!this.callerPhone) return this.systemMessage.message;
 		return `${this.systemMessage.message}
 
-═══════════════════════════════════════════════
-CALLER PHONE (ALREADY KNOWN — DO NOT ASK)
-═══════════════════════════════════════════════
+## CALLER PHONE (ALREADY KNOWN — DO NOT ASK)
 The patient's phone number on this call is: **${this.callerPhone}**.
 - Do **not** ask the patient for their phone number.
 - When calling \`book_appointment\`, pass this number as \`phone_number\` (digits only, per tool schema).`;
@@ -944,6 +993,19 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 					result = await this.findAvailableSlots(slotArgs);
 					break;
 				}
+				case "find_doctor_slots": {
+					const doctorSlotArgs = normalizeFindDoctorSlotsArgs(parsedArgs);
+					if (!doctorSlotArgs) {
+						result = JSON.stringify({
+							error: true,
+							message:
+								"find_doctor_slots: invalid arguments (expected doctor_id, optional preferred_time, optional limit)",
+						});
+						break;
+					}
+					result = await this.findDoctorSlots(doctorSlotArgs);
+					break;
+				}
 				case "book_appointment": {
 					const bookArgs = normalizeBookAppointmentArgs(parsedArgs);
 					if (!bookArgs) {
@@ -1167,6 +1229,80 @@ The patient's phone number on this call is: **${this.callerPhone}**.
 		);
 
 		return JSON.stringify({ found: true, doctors: top });
+	}
+
+	private async findDoctorSlots(params: {
+		doctorId: number;
+		preferredTime?: string;
+		limit?: number;
+	}): Promise<string> {
+		const path = "/api/doctors/availability";
+		const query = {
+			doctor_id: params.doctorId,
+			time: params.preferredTime,
+			limit: params.limit,
+		};
+
+		console.log(
+			"---------------------- find_doctor_slots REQUEST ----------------------",
+		);
+		console.log("url:", nextjsApi.getUri({ url: path, params: query }));
+		console.log("query:", JSON.stringify(query, null, 2));
+		console.log(
+			"-------------------------------------------------------------",
+		);
+
+		const { data } = await nextjsApi.get<DoctorAvailabilityResponse>(path, {
+			params: query,
+		});
+
+		const doctorName = `Dr. ${data.doctor.firstName} ${data.doctor.lastName}`;
+		if (!data.found || data.slots.length === 0) {
+			console.log(
+				"---------------------- find_doctor_slots EMPTY ----------------------",
+			);
+			console.log("query:", JSON.stringify(query, null, 2));
+			console.log("doctor:", doctorName, "doctorId:", data.doctor.id);
+			console.log(
+				"-------------------------------------------------------------",
+			);
+			return JSON.stringify({
+				found: false,
+				doctor: {
+					doctorId: data.doctor.id,
+					name: doctorName,
+					cabinet: data.doctor.cabinetName,
+					address: data.doctor.address ?? null,
+				},
+				message: "No available slots were found for this doctor.",
+			});
+		}
+
+		const slots = data.slots.map((slot) => ({
+			slotStart: slot.start,
+			slotEnd: slot.end,
+		}));
+
+		console.log(
+			"---------------------- find_doctor_slots OK ----------------------",
+		);
+		console.log("doctor:", doctorName, "doctorId:", data.doctor.id);
+		console.log("returnedSlots:", slots.length);
+		console.log("slots:", JSON.stringify(slots, null, 2));
+		console.log(
+			"-------------------------------------------------------------",
+		);
+
+		return JSON.stringify({
+			found: true,
+			doctor: {
+				doctorId: data.doctor.id,
+				name: doctorName,
+				cabinet: data.doctor.cabinetName,
+				address: data.doctor.address ?? null,
+			},
+			slots,
+		});
 	}
 
 	private async bookAppointment(params: {

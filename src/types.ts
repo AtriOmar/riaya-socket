@@ -148,6 +148,19 @@ export type BestFitDoctor = {
 	nextSlot: { start: string; end: string };
 };
 
+/** Response from `GET /api/doctors/availability` */
+export type DoctorAvailabilityResponse = {
+	doctor: {
+		id: number;
+		firstName: string;
+		lastName: string;
+		cabinetName: string;
+		address: string | null;
+	};
+	found: boolean;
+	slots: { start: string; end: string }[];
+};
+
 /** Body for `POST /api/appointments/external` */
 export type BookAppointmentParams = {
 	doctorId: number;
