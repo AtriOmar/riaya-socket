@@ -425,10 +425,11 @@ export class TwilioSession {
 		if (!this.callerPhone) return this.systemMessage.message;
 		return `${this.systemMessage.message}
 
-## CALLER PHONE (ALREADY KNOWN — DO NOT ASK)
-The patient's phone number on this call is: **${this.callerPhone}**.
-- Do **not** ask the patient for their phone number.
-- When calling \`book_appointment\`, pass this number as \`phone_number\` (digits only, per tool schema).`;
+## CALLER PHONE (THIS LINE)
+The phone number for this call is: **${this.callerPhone}**.
+- **Ask** the patient whether to use **this number** for the booking or **a different** number.
+- If they want **this** number: pass it as \`phone_number\` to \`book_appointment\` (**digits only** — strip \`+\`, spaces, dashes).
+- If they want **another** number: ask them to say it. It must be **Tunisian**, **exactly 8 digits**, **without** \`+216\`. If it is **unclear**, **not** exactly 8 digits, or you are **not sure** what they said, ask them to **repeat** until you have a valid 8-digit local number, then pass those **8 digits** as \`phone_number\`.`;
 	}
 
 	private sendSessionConfig() {
