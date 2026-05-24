@@ -6,7 +6,10 @@
 	"description": "Riaya Realtime - Twilio phone call to Azure OpenAI Realtime API bridge for doctor appointment booking",
 	"type": "module",
 	"nodemonConfig": {
-		"ignore": ["whatsapp-auth/**", "node_modules/**"]
+		"ignore": [
+			"whatsapp-auth/**",
+			"node_modules/**"
+		]
 	},
 	"scripts": {
 		"start": "tsc && node dist/server.js",
@@ -23,7 +26,7 @@
 		"@azure/identity": "^4.11.1",
 		"@biomejs/biome": "^2.4.10",
 		"@hapi/boom": "^10.0.1",
-		"@whiskeysockets/baileys": "7.0.0-rc10",
+		"@whiskeysockets/baileys": "7.0.0-rc13",
 		"axios": "^1.7.9",
 		"cors": "^2.8.5",
 		"dotenv": "^17.2.2",
