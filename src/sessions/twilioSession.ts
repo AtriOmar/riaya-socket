@@ -3,11 +3,11 @@ import axios from "axios";
 import type { Logger } from "pino";
 import twilio from "twilio";
 import { type RawData, WebSocket } from "ws";
-import { createCallEvent, ensureCallRow, updateCall } from "./callsApi.js";
-import { ensurePersonRow, updatePersonRow } from "./personsApi.js";
-import { CITIES } from "./constants/cities.js";
-import { SPECIALITIES } from "./constants/specialities.js";
-import { nextjsApi } from "./nextjsApiClient.js";
+import { createCallEvent, ensureCallRow, updateCall } from "../api/callsApi.js";
+import { ensurePersonRow, updatePersonRow } from "../api/personsApi.js";
+import { CITIES } from "../constants/cities.js";
+import { SPECIALITIES } from "../constants/specialities.js";
+import { nextjsApi } from "../api/nextjsApiClient.js";
 import type {
 	BestFitDoctor,
 	BookAppointmentParams,
@@ -15,7 +15,7 @@ import type {
 	DoctorAvailabilityResponse,
 	SystemMessage,
 	TwilioMediaMessage,
-} from "./types.js";
+} from "../types/index.js";
 
 
 const {

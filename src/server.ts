@@ -9,11 +9,11 @@ import express, {
 } from "express";
 import { pino } from "pino";
 import { type WebSocket, WebSocketServer } from "ws";
-import { ensureCallRow } from "./callsApi.js";
-import { ensurePersonRow } from "./personsApi.js";
-import { getSystemMessage } from "./systemMessages.js";
-import { TwilioSession } from "./twilioSession.js";
-import { WhatsappService, type WhatsappStatus } from "./whatsappService.js";
+import { ensureCallRow } from "./api/callsApi.js";
+import { ensurePersonRow } from "./api/personsApi.js";
+import { getSystemMessage } from "./sessions/systemMessages.js";
+import { TwilioSession } from "./sessions/twilioSession.js";
+import { WhatsappService, type WhatsappStatus } from "./services/whatsappService.js";
 
 
 const PORT = process.env.PORT || 8080;
