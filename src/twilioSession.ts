@@ -1,10 +1,10 @@
 import { DefaultAzureCredential } from "@azure/identity";
 import axios from "axios";
-import { config } from "dotenv";
 import type { Logger } from "pino";
 import twilio from "twilio";
 import { type RawData, WebSocket } from "ws";
 import { createCallEvent, ensureCallRow, updateCall } from "./callsApi.js";
+import { ensurePersonRow, updatePersonRow } from "./personsApi.js";
 import { CITIES } from "./constants/cities.js";
 import { SPECIALITIES } from "./constants/specialities.js";
 import { nextjsApi } from "./nextjsApiClient.js";
@@ -17,7 +17,6 @@ import type {
 	TwilioMediaMessage,
 } from "./types.js";
 
-config();
 
 const {
 	BACKEND,
@@ -152,10 +151,21 @@ type FindDoctorSlotsArgs = {
 type BookAppointmentToolArgs = {
 	doctorId: number | string;
 	patientName: string;
-	phoneNumber: string;
 	illness: string;
 	start: string;
 	end: string;
+};
+
+function phoneDigitsOnly(raw: string): string {
+	return raw.replace(/\D/g, "");
+}
+
+type UpdatePersonInfoToolArgs = {
+	firstName?: string;
+	lastName?: string;
+	dateOfBirth?: string;
+	gender?: string;
+	address?: string;
 };
 
 function strField(
@@ -256,13 +266,11 @@ function normalizeBookAppointmentArgs(
 	const o = raw as Record<string, unknown>;
 	const doctorId = o.doctor_id ?? o.doctorId;
 	const patientName = strField(o, "patient_name", "patientName");
-	const phoneNumber = strField(o, "phone_number", "phoneNumber");
 	const illness = strField(o, "illness", "illness");
 	const start = strField(o, "start", "start");
 	const end = strField(o, "end", "end");
 	if (
 		patientName === undefined ||
-		phoneNumber === undefined ||
 		illness === undefined ||
 		start === undefined ||
 		end === undefined
@@ -272,10 +280,41 @@ function normalizeBookAppointmentArgs(
 	return {
 		doctorId: doctorId as number | string,
 		patientName,
-		phoneNumber,
 		illness,
 		start,
 		end,
+	};
+}
+
+/** Accepts snake_case (tool schema) or legacy camelCase; maps to internal shape for HTTP. */
+function normalizeUpdatePersonInfoArgs(
+	raw: unknown,
+): UpdatePersonInfoToolArgs | null {
+	if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+		return null;
+	const o = raw as Record<string, unknown>;
+	const firstName = strField(o, "first_name", "firstName");
+	const lastName = strField(o, "last_name", "lastName");
+	const dateOfBirth = strField(o, "date_of_birth", "dateOfBirth");
+	const gender = strField(o, "gender", "gender");
+	const address = strField(o, "address", "address");
+
+	if (
+		firstName === undefined &&
+		lastName === undefined &&
+		dateOfBirth === undefined &&
+		gender === undefined &&
+		address === undefined
+	) {
+		return null;
+	}
+
+	return {
+		...(firstName !== undefined ? { firstName } : {}),
+		...(lastName !== undefined ? { lastName } : {}),
+		...(dateOfBirth !== undefined ? { dateOfBirth } : {}),
+		...(gender !== undefined ? { gender } : {}),
+		...(address !== undefined ? { address } : {}),
 	};
 }
 
@@ -326,6 +365,9 @@ export class TwilioSession {
 
 	/** E.164 (or Twilio-provided) caller ID from Stream customParameters */
 	private callerPhone: string | null = null;
+
+	/** DB id of the person record for this caller (set once callerPhone is known). */
+	private personId: number | null = null;
 
 	/** Only the first session.update should trigger the opening greeting */
 	private initialGreetingSent = false;
@@ -427,9 +469,7 @@ export class TwilioSession {
 
 ## CALLER PHONE (THIS LINE)
 The phone number for this call is: **${this.callerPhone}**.
-- **Ask** the patient whether to use **this number** for the booking or **a different** number.
-- If they want **this** number: pass it as \`phone_number\` to \`book_appointment\` (**digits only** — strip \`+\`, spaces, dashes).
-- If they want **another** number: ask them to say it. It must be **Tunisian**, **exactly 8 digits**, **without** \`+216\`. If it is **unclear**, **not** exactly 8 digits, or you are **not sure** what they said, ask them to **repeat** until you have a valid 8-digit local number, then pass those **8 digits** as \`phone_number\`.`;
+The server uses this number automatically when \`book_appointment\` runs. Do **not** ask the patient about their phone number.`;
 	}
 
 	private sendSessionConfig() {
@@ -653,6 +693,16 @@ The phone number for this call is: **${this.callerPhone}**.
 					const trimmed = raw.trim();
 					this.callerPhone = trimmed.length > 0 ? trimmed : null;
 					this.callStartedAt = new Date();
+
+					// Ensure person exists (idempotent — /incoming-call likely already started this).
+					if (this.callerPhone) {
+						void ensurePersonRow(this.callerPhone).then((id) => {
+							this.personId = id;
+							if (id != null) {
+								this.logger.info({ personId: id }, "👤 Person upserted");
+							}
+						});
+					}
 
 					// Ensure DB row exists (idempotent — /incoming-call likely already started this).
 					this.dbCallIdPromise = ensureCallRow({
@@ -1013,11 +1063,24 @@ The phone number for this call is: **${this.callerPhone}**.
 						result = JSON.stringify({
 							error: true,
 							message:
-								"book_appointment: invalid arguments (expected doctor_id, patient_name, phone_number, illness, start, end)",
+								"book_appointment: invalid arguments (expected doctor_id, patient_name, illness, start, end)",
 						});
 						break;
 					}
 					result = await this.bookAppointment(bookArgs);
+					break;
+				}
+				case "update_person_info": {
+					const personArgs = normalizeUpdatePersonInfoArgs(parsedArgs);
+					if (!personArgs) {
+						result = JSON.stringify({
+							error: true,
+							message:
+								"update_person_info: invalid arguments (expected at least one of first_name, last_name, date_of_birth, gender, address)",
+						});
+						break;
+					}
+					result = await this.updatePersonInfo(personArgs);
 					break;
 				}
 				default:
@@ -1306,21 +1369,41 @@ The phone number for this call is: **${this.callerPhone}**.
 		});
 	}
 
-	private async bookAppointment(params: {
-		doctorId: number | string;
-		patientName: string;
-		phoneNumber: string;
-		illness: string;
-		start: string;
-		end: string;
-	}): Promise<string> {
+	private async bookAppointment(params: BookAppointmentToolArgs): Promise<string> {
 		console.log(
 			"---------------------- book_appointment INPUT ----------------------",
 		);
 		console.log(JSON.stringify(params, null, 2));
+		console.log("callerPhone:", this.callerPhone);
 		console.log(
 			"-------------------------------------------------------------",
 		);
+
+		const callerRaw = this.callerPhone?.trim();
+		if (!callerRaw) {
+			const msg =
+				"book_appointment: no caller phone on this call (Twilio From / callerPhone)";
+			console.log(
+				"---------------------- book_appointment VALIDATION ERROR ----------------------",
+			);
+			console.log(msg);
+			console.log(
+				"-------------------------------------------------------------",
+			);
+			throw new Error(msg);
+		}
+		const phoneNumber = phoneDigitsOnly(callerRaw);
+		if (phoneNumber.length < 8) {
+			const msg = `book_appointment: caller phone too short after normalization (${phoneNumber.length} digits)`;
+			console.log(
+				"---------------------- book_appointment VALIDATION ERROR ----------------------",
+			);
+			console.log("callerPhone:", callerRaw, "digits:", phoneNumber);
+			console.log(
+				"-------------------------------------------------------------",
+			);
+			throw new Error(msg);
+		}
 
 		const doctorId = Number(params.doctorId);
 		if (
@@ -1343,7 +1426,7 @@ The phone number for this call is: **${this.callerPhone}**.
 		const body: BookAppointmentParams = {
 			doctorId,
 			name: params.patientName,
-			phoneNumber: params.phoneNumber,
+			phoneNumber,
 			illness: params.illness,
 			start: params.start,
 			end: params.end,
@@ -1396,6 +1479,70 @@ The phone number for this call is: **${this.callerPhone}**.
 			appointment_id: appointmentId,
 			status: row?.status,
 			message: "Appointment created successfully with pending status.",
+		});
+	}
+
+	private async updatePersonInfo(
+		params: UpdatePersonInfoToolArgs,
+	): Promise<string> {
+		console.log(
+			"---------------------- update_person_info INPUT ----------------------",
+		);
+		console.log(JSON.stringify(params, null, 2));
+		console.log("personId:", this.personId);
+		console.log(
+			"-------------------------------------------------------------",
+		);
+
+		if (this.personId == null && this.callerPhone) {
+			console.log(
+				"---------------------- update_person_info AWAITING PERSON ----------------------",
+			);
+			console.log("callerPhone:", this.callerPhone);
+			console.log(
+				"-------------------------------------------------------------",
+			);
+			this.personId = await ensurePersonRow(this.callerPhone);
+		}
+
+		if (this.personId == null) {
+			const msg =
+				"update_person_info: no person record for this caller (ensurePersonRow may still be pending)";
+			console.log(
+				"---------------------- update_person_info VALIDATION ERROR ----------------------",
+			);
+			console.log(msg);
+			console.log("callerPhone:", this.callerPhone);
+			console.log(
+				"-------------------------------------------------------------",
+			);
+			throw new Error(msg);
+		}
+
+		const path = `/api/persons/${this.personId}`;
+		console.log(
+			"---------------------- update_person_info REQUEST ----------------------",
+		);
+		console.log("url:", `${nextjsApi.defaults.baseURL}${path}`);
+		console.log("body:", JSON.stringify(params, null, 2));
+		console.log(
+			"-------------------------------------------------------------",
+		);
+
+		const data = await updatePersonRow(this.personId, params);
+
+		console.log(
+			"---------------------- update_person_info RESPONSE ----------------------",
+		);
+		console.log(data);
+		console.log(
+			"-------------------------------------------------------------",
+		);
+
+		return JSON.stringify({
+			success: true,
+			person_id: data.id,
+			message: "Person record updated successfully.",
 		});
 	}
 

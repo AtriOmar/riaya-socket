@@ -1,4 +1,7 @@
 import http from "node:http";
+import { config } from "dotenv";
+config()
+
 import express, {
 	type NextFunction,
 	type Request,
@@ -7,9 +10,11 @@ import express, {
 import { pino } from "pino";
 import { type WebSocket, WebSocketServer } from "ws";
 import { ensureCallRow } from "./callsApi.js";
+import { ensurePersonRow } from "./personsApi.js";
 import { getSystemMessage } from "./systemMessages.js";
 import { TwilioSession } from "./twilioSession.js";
 import { WhatsappService, type WhatsappStatus } from "./whatsappService.js";
+
 
 const PORT = process.env.PORT || 8080;
 
@@ -129,15 +134,16 @@ app.all("/incoming-call", (req: Request, res: Response) => {
 		"📞 Incoming call webhook",
 	);
 
-	// Fire-and-forget: create the call row in Next.js. TwilioSession will
-	// await the same promise (cached by callSid) before persisting events.
+	// Fire-and-forget: create the call row and person in Next.js. TwilioSession
+	// will await the same cached promises before persisting events / updating person.
 	if (callSid) {
-		console.log(
-			"-------------------- callSid ensureCallRow --------------------",
-		);
-		console.log(callSid);
 		ensureCallRow({ callSid, from, to, direction }).catch((err) =>
 			logger.error({ err }, "🔥 Failed to create call row"),
+		);
+	}
+	if (from) {
+		ensurePersonRow(from).catch((err) =>
+			logger.error({ err }, "🔥 Failed to upsert person"),
 		);
 	}
 
