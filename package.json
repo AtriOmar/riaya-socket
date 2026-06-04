@@ -14,7 +14,7 @@
 	"scripts": {
 		"start": "tsc && node dist/server.js",
 		"build": "tsc",
-		"dev": "tsc && concurrently \"tsc --watch\" \"nodemon dist/server.js\"",
+		"dev": "tsx watch src/server.ts --env-file=.env",
 		"lint": "biome check",
 		"format": "biome format",
 		"fix:lint": "biome check --write",

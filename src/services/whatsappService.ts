@@ -17,6 +17,9 @@ export type WhatsappStatus =
 
 const AUTH_FOLDER = path.resolve("./whatsapp-auth");
 
+const MAX_RECONNECT_ATTEMPTS = 10;
+const RECONNECT_INTERVAL_MS = 3_000;
+
 const silentLogger = pino({ level: "silent" });
 
 export class WhatsappService extends EventEmitter {
@@ -24,12 +27,15 @@ export class WhatsappService extends EventEmitter {
 	private connected = false;
 	private phone: string | undefined = undefined;
 	private lastQr: string | null = null;
+	private reconnectAttempts = 0;
+	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	private logger = pino({
 		level: process.env.LOG_LEVEL || "debug",
 		transport: { target: "pino-pretty", options: { colorize: true } },
 	});
 
 	async connect() {
+		this.resetReconnectState();
 		this.logger.info("[WhatsApp] Starting Baileys connection...");
 		await this.startSocket();
 	}
@@ -49,6 +55,49 @@ export class WhatsappService extends EventEmitter {
 		const jid = `${phone.replace(/\D/g, "")}@s.whatsapp.net`;
 		await this.sock.sendMessage(jid, { text });
 		this.logger.info({ jid }, "[WhatsApp] Message sent");
+	}
+
+	private clearReconnectTimer(): void {
+		if (this.reconnectTimer) {
+			clearTimeout(this.reconnectTimer);
+			this.reconnectTimer = null;
+		}
+	}
+
+	private resetReconnectState(): void {
+		this.clearReconnectTimer();
+		this.reconnectAttempts = 0;
+	}
+
+	private scheduleReconnect(reason: string): void {
+		this.reconnectAttempts += 1;
+
+		if (this.reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+			const message = `max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) exceeded: ${reason}`;
+			this.logger.error(
+				{ attempts: this.reconnectAttempts - 1, reason },
+				"[WhatsApp] Giving up on reconnect",
+			);
+			this.emit("status", { type: "disconnected", reason: message });
+			return;
+		}
+
+		this.logger.info(
+			{
+				attempt: this.reconnectAttempts,
+				maxAttempts: MAX_RECONNECT_ATTEMPTS,
+				intervalMs: RECONNECT_INTERVAL_MS,
+				reason,
+			},
+			"[WhatsApp] Scheduling reconnect",
+		);
+		this.emit("status", { type: "connecting" });
+
+		this.clearReconnectTimer();
+		this.reconnectTimer = setTimeout(() => {
+			this.reconnectTimer = null;
+			void this.startSocket();
+		}, RECONNECT_INTERVAL_MS);
 	}
 
 	/** End the current Baileys socket so a new one can own auth writes (avoids races / corrupt creds). */
@@ -99,6 +148,8 @@ export class WhatsappService extends EventEmitter {
 			}
 
 			if (connection === "open") {
+				this.reconnectAttempts = 0;
+				this.clearReconnectTimer();
 				this.connected = true;
 				this.lastQr = null;
 				this.phone = this.sock?.user?.id?.split(":")[0];
@@ -124,9 +175,9 @@ export class WhatsappService extends EventEmitter {
 
 				const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 				if (shouldReconnect) {
-					this.logger.info("[WhatsApp] Reconnecting...");
-					await this.startSocket();
+					this.scheduleReconnect(reason);
 				} else {
+					this.resetReconnectState();
 					this.logger.warn("[WhatsApp] Logged out - manual re-link required");
 				}
 			}
