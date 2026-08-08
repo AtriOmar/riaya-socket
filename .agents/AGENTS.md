@@ -7,7 +7,7 @@ This document is a compact project guide for AI assistants working on this repo.
 - Riaya is an AI-powered healthcare appointment platform.
 - The repo has **two TypeScript apps**:
   - `web/`: Next.js web app (frontend + API routes + DB layer). Package name in `package.json` is `web-ts`.
-  - `socket/`: realtime bridge for Twilio phone calls, dashboard websocket streaming, and AI-assisted booking flow.
+  - `voice/`: realtime bridge for Twilio phone calls, dashboard websocket streaming, and AI-assisted booking flow.
 - High-level phone-booking flow:
   - Twilio hits `socket` `/incoming-call` → TwiML connects media stream; `ensureCallRow` and `ensurePersonRow` upsert DB rows in Next (cached by `callSid` / phone).
   - `TwilioSession` bridges Twilio audio ↔ OpenAI Realtime ↔ dashboard websocket.
